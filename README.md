@@ -2,7 +2,7 @@
 
 Desarrollo de una API REST utilizando Node.js y Express para la gestión de un álbum de fotos.
 
-El proyecto implementa un servidor HTTP que expone rutas para listar, consultar y crear fotos, respondiendo siempre en formato JSON con los códigos de estado HTTP correspondientes. Por ahora, los datos se guardan en un arreglo en memoria que funciona como una "base de datos" temporal.
+El proyecto implementa un servidor HTTP con un CRUD completo que expone rutas para listar, consultar, crear, actualizar y eliminar fotos, respondiendo siempre en formato JSON con los códigos de estado HTTP correspondientes. Por ahora, los datos se guardan en un arreglo en memoria que funciona como una "base de datos" temporal.
 
 El servidor cuenta con middlewares para interpretar el cuerpo JSON de las peticiones, registrar en consola cada petición recibida y manejar de forma centralizada los errores, devolviendo un mensaje genérico al cliente cuando algo falla.
 
@@ -33,6 +33,8 @@ album-express/
 | `GET`  | `/api/fotos`      | Lista todas las fotos             | `200`               |
 | `GET`  | `/api/fotos/:id`  | Obtiene una foto por su `id`      | `200`, `400`, `404` |
 | `POST` | `/api/fotos`      | Crea una nueva foto               | `201`, `400`        |
+| `PATCH`  | `/api/fotos/:id` | Actualiza solo los campos enviados | `200`, `400`, `404` |
+| `DELETE` | `/api/fotos/:id` | Elimina una foto                  | `204`, `400`, `404` |
 | `GET`  | `/api/error`      | Ruta de prueba que lanza un error | `500`               |
 
 Cada foto tiene la siguiente forma:
@@ -105,6 +107,54 @@ Cada foto tiene la siguiente forma:
 
   Se agregó un middleware con cuatro parámetros `(err, req, res, next)`, que es la forma en que Express reconoce un manejador de errores. Este imprime el error completo en la consola del servidor y responde al cliente con `500` y el mensaje `Error interno del servidor`, sin exponer detalles internos.
 
+### Parte 5: CRUD completo en memoria
+
+- **Actualización parcial:**
+
+  La ruta `PATCH /api/fotos/:id` busca la foto y modifica únicamente los campos que vienen en `req.body`; los que no se envían conservan su valor. Aplica las mismas validaciones que la creación: el `titulo`, si se envía, no puede estar vacío, y la `calificacion` debe ser un número entre 0 y 5. El `id` no se puede modificar. Responde `200` con la foto actualizada.
+
+- **Eliminación:**
+
+  La ruta `DELETE /api/fotos/:id` obtiene la posición de la foto con `fotos.findIndex(...)`. Si el resultado es `-1`, la foto no existe y responde `404`; de lo contrario, la elimina con `fotos.splice(indice, 1)` y responde `res.status(204).end()`, es decir, un `204` sin cuerpo.
+
+### Parte 6: persistencia de los datos
+
+Se crearon y eliminaron fotos, se reinició el servidor y se volvió a listar:
+
+- **Antes de reiniciar:** la lista tenía la foto creada (`Cerro Santa Ana`), sin la foto eliminada (`Malecon`) y con la calificación modificada.
+- **Después de reiniciar:** la lista volvió a ser exactamente las dos fotos iniciales.
+
+**Por qué ocurre:** el arreglo `fotos` es una variable que vive en la memoria RAM del proceso de Node.js. Cada vez que el servidor se detiene, esa memoria se libera, y al iniciarse de nuevo el archivo `server.js` se ejecuta desde el principio, creando otra vez el arreglo con sus dos fotos iniciales. Los cambios nunca se guardaron en un lugar permanente, como un archivo o una base de datos. Esto se resolverá usando PostgreSQL.
+
+### Parte 7: propuesta de organización
+
+Si la API tuviera 30 rutas, tenerlas todas en `server.js` haría el archivo difícil de leer y mantener. La propuesta es separar el código por responsabilidad, agrupando las rutas por recurso con `express.Router()`:
+
+```text
+src/
+├─ routes/
+│  └─ fotos.routes.js        # Solo define las rutas: router.get('/', ...), router.patch('/:id', ...)
+│
+├─ controllers/
+│  └─ fotos.controller.js    # Funciones que reciben req y res y deciden la respuesta
+│
+├─ services/
+│  └─ fotos.service.js       # Lógica del negocio: buscar, crear, actualizar y eliminar fotos
+│
+├─ data/
+│  └─ fotos.data.js          # Datos en memoria (después, la conexión a PostgreSQL)
+│
+├─ middlewares/
+│  ├─ logger.js              # Registro de peticiones
+│  ├─ validarId.js           # Validación del :id, reutilizada por GET, PATCH y DELETE
+│  └─ manejoErrores.js       # Middleware de errores (500)
+│
+├─ app.js                    # Crea la app, registra middlewares y monta app.use('/api/fotos', fotosRouter)
+└─ server.js                 # Solo inicia el servidor con app.listen()
+```
+
+Con esta estructura, agregar un nuevo recurso (por ejemplo, álbumes o usuarios) consiste en crear sus propios archivos de rutas, controlador y servicio, sin tocar los existentes. Además, al cambiar a PostgreSQL solo se modifica la capa de datos y servicios, mientras que las rutas y controladores siguen iguales.
+
 ### Verificación del funcionamiento
 
 Con el servidor en ejecución, se probaron las rutas desde PowerShell usando `curl.exe`:
@@ -121,6 +171,12 @@ curl.exe --% -s -w " -> %{http_code}\n" -X POST -H "Content-Type: application/js
 
 # Crear sin título -> 400
 curl.exe --% -s -w " -> %{http_code}\n" -X POST -H "Content-Type: application/json" -d "{}" http://localhost:3000/api/fotos
+
+# Actualizar solo la calificación de la foto 1 -> 200
+curl.exe --% -s -w " -> %{http_code}\n" -X PATCH -H "Content-Type: application/json" -d "{\"calificacion\":5}" http://localhost:3000/api/fotos/1
+
+# Eliminar la foto 2 -> 204
+curl.exe --% -s -w " -> %{http_code}\n" -X DELETE http://localhost:3000/api/fotos/2
 
 # Error forzado -> 500
 curl.exe -s -w " -> %{http_code}\n" http://localhost:3000/api/error
